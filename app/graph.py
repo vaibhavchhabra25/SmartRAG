@@ -4,10 +4,11 @@ from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from app import config
+from app import config, parent_store
 from app.guardrails import check_input, check_output, refusal_for
 from app.hallucination import STRICTER_INSTRUCTION, UNVERIFIED_WARNING, check_grounding
 from app.llm import call_text
+from app.rerank import rerank
 from app.vectorstore import similarity_search
 
 CITATION_RE = re.compile(r"\[Source:\s*([^\]]+?)\s*§\s*([^\]]+?)\]")
@@ -40,8 +41,33 @@ def input_guardrail_node(state: PipelineState) -> PipelineState:
 
 
 def retrieve_node(state: PipelineState) -> PipelineState:
-    hits = similarity_search(state["question"], k=config.TOP_K)
-    retrieved = [{"text": doc.page_content, "metadata": doc.metadata, "score": score} for doc, score in hits]
+    """Hierarchical retrieval: cast a wide net over child chunks, rerank with a cross-encoder,
+    then expand the winners to their full parent section text (deduped) for generation.
+
+    The wide embedding-similarity pool (RETRIEVAL_CANDIDATES) trades a cheap extra few candidates
+    for the cross-encoder to have something to actually choose between; expanding to parent text
+    is what gives long documents enough surrounding context instead of an isolated small chunk.
+    """
+    hits = similarity_search(state["question"], k=config.RETRIEVAL_CANDIDATES)
+    reranked = rerank(state["question"], hits)
+
+    retrieved = []
+    seen_parents = set()
+    for doc, score in reranked:
+        if len(retrieved) >= config.TOP_K:
+            break
+        parent_id = doc.metadata.get("parent_id")
+        if parent_id in seen_parents:
+            continue
+        seen_parents.add(parent_id)
+        parent = parent_store.load_parent(parent_id) if parent_id else None
+        text = parent["text"] if parent else doc.page_content
+        metadata = {
+            "source_doc": parent["source_doc"] if parent else doc.metadata.get("source_doc"),
+            "section": parent["section"] if parent else doc.metadata.get("section"),
+        }
+        retrieved.append({"text": text, "metadata": metadata, "score": score})
+
     context = "\n\n".join(
         f"[source_doc: {r['metadata']['source_doc']} | section: {r['metadata']['section']}]\n{r['text']}"
         for r in retrieved

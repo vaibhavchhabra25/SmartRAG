@@ -41,5 +41,22 @@ CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 TOP_K = 4
 
+# Hierarchical retrieval: fetch a wider pool of child chunks, rerank, then expand the winners
+# to their parent section text for generation.
+RETRIEVAL_CANDIDATES = 12
+RERANK_MODEL = os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-base")
+# Final score = (1 - RERANK_WEIGHT) * normalized_embedding_score + RERANK_WEIGHT * normalized_rerank_score.
+# Blended rather than rerank-only: on this small, jargon-dense, structurally uniform corpus,
+# general-purpose cross-encoders (tested both ms-marco-MiniLM-L-6-v2 and bge-reranker-base) can
+# bury a clearly-correct section that embedding similarity already ranked highly. Blending lets
+# the reranker break ties / catch lexical matches embeddings miss, without letting it fully
+# override a strong embedding match.
+RERANK_WEIGHT = float(os.environ.get("RERANK_WEIGHT", "0.4"))
+
+# Cap on parent (section) size in characters, so even an unstructured long document can't blow
+# up the generation context with one giant "section".
+PARENT_MAX_CHARS = 3000
+PARENT_STORE_PATH = CHROMA_DIR / "parents.json"
+
 HALLUCINATION_GROUNDED_THRESHOLD = 0.85
 COLLECTION_NAME = "compliance_policies"

@@ -1,4 +1,6 @@
 """Thin wrapper around the Chroma vector store used for policy retrieval."""
+import warnings
+
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -34,5 +36,12 @@ def reset_store() -> None:
 
 
 def similarity_search(query: str, k: int = config.TOP_K):
-    """Return top-k (Document, score) pairs for a query."""
-    return get_store().similarity_search_with_relevance_scores(query, k=k)
+    """Return top-k (Document, score) pairs for a query.
+
+    Chroma's relevance-score normalization assumes bounded distances and warns when a score
+    falls outside [0, 1] (harmless here — we only use these scores for our own relative
+    min-max normalization downstream in app.rerank, not as an absolute probability).
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return get_store().similarity_search_with_relevance_scores(query, k=k)

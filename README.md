@@ -31,7 +31,7 @@ question
   ├─ unsafe ──────────────────────────────────────────► refusal message (with reason) ─► done
   │
   ▼ safe
-[retrieve]            top-k similarity search over Chroma (policy chunks + doc/section metadata)
+[retrieve]            wide candidate search (Chroma) → blended cross-encoder rerank → expand to parent sections
   │
   ▼
 [generate]            Claude answers using ONLY retrieved context, with inline [Source: doc §section] citations
@@ -54,9 +54,14 @@ This is implemented as a `langgraph` `StateGraph` in [app/graph.py](app/graph.py
 `input_guardrail_node`, `retrieve_node`, `generate_node`, `hallucination_node`, and
 `output_guardrail_node`, wired together with conditional edges.
 
-- **Retrieval**: policy docs are split by their `§N` section headers (so citations map cleanly
-  to a real policy section), then chunked, embedded with a local `sentence-transformers` model
-  (no extra API key required), and stored in Chroma ([app/ingest.py](app/ingest.py)).
+- **Hierarchical retrieval**: documents are split into parent sections (`§N` headers → markdown
+  headers → fixed-size pseudo-sections, whichever applies, each capped in size) and then into
+  small child chunks for embedding. Retrieval fetches a wide pool of child chunks by embedding
+  similarity, reranks them with a local cross-encoder *blended* with the embedding score, then
+  expands the winners to their full parent section text for generation — good precision on short
+  docs, good context completeness on long ones. See [ARCHITECTURE.md](ARCHITECTURE.md) for why
+  pure cross-encoder reranking was tried and replaced with the blend. ([app/ingest.py](app/ingest.py),
+  [app/rerank.py](app/rerank.py), [app/parent_store.py](app/parent_store.py))
 - **Guardrails**: two LLM-as-judge classifiers ([app/guardrails.py](app/guardrails.py),
   prompts in [app/prompts/](app/prompts/)) — one on the incoming question, one on the drafted
   answer — each returning structured JSON (`verdict`, `category`, `reason`) so the graph can

@@ -38,7 +38,7 @@ question
   │
   ├─ unsafe ──────────────────────────────────────────► refusal message (with reason) ─► done
   ▼ safe
-[retrieve]            top-k similarity search over Chroma (policy chunks + doc/section metadata)
+[retrieve]            wide candidate search → blended rerank → expand winners to parent sections
   ▼
 [generate]            LLM answers using ONLY retrieved context, with inline [Source: doc §section] citations
   ▼
@@ -69,13 +69,15 @@ function, which is what makes the retry-once and early-exit-on-block logic legib
 
 | Concept | What it does here | Where |
 |---|---|---|
-| **Document loading & section-aware chunking** | Policy docs are split on their own `## §N Title` headers *before* the generic recursive character splitter runs, so every chunk inherits a real `(source_doc, section)` pair instead of an arbitrary character offset. This is what makes citations meaningful rather than cosmetic. | [app/ingest.py](app/ingest.py) `_split_into_sections`, `chunk_documents` |
+| **Hierarchical chunking (parent sections / child chunks)** | A 3-tier fallback resolves each document's "sections": real `## §N Title` headers (the policy convention) → generic markdown headers (for structured uploads) → fixed-size pseudo-sections labeled "Part N" (for fully unstructured long text, e.g. a plain PDF with no headings). Every resolved section is capped at `PARENT_MAX_CHARS` so even a real `§N` section can't blow up the context window for a long document. Each capped section becomes a **parent**; it's then split into small (~800 char) **child** chunks for embedding, each tagged with its `parent_id`. Short docs end up ~1 child per section (same behavior as before); long docs get many children per parent, all traceable back to one bounded, citable section. | [app/ingest.py](app/ingest.py) `_split_into_sections`, `chunk_documents` |
+| **Parent store** | Children are the embedding/search unit; parents are looked up by `parent_id` at query time to give generation full section context instead of an isolated fragment. Persisted as a small JSON file (`.chroma/parents.json`) rather than kept in memory, since the CLI is a fresh process per question — ingest and query happen in separate process runs. | [app/parent_store.py](app/parent_store.py) |
 | **Embeddings** | Local `sentence-transformers/all-MiniLM-L6-v2` via `langchain-huggingface` — no embedding API key, runs offline, fast enough for a knowledge base this size. Swappable via `EMBEDDING_MODEL` in `.env`. | [app/vectorstore.py](app/vectorstore.py) |
-| **Vector store** | Chroma, persisted to a local directory (`.chroma/`). One collection, similarity search with relevance scores. | [app/vectorstore.py](app/vectorstore.py) |
-| **Retrieval** | Top-`k` (default 4) similarity search per question; no reranking or query rewriting — appropriate for a six-document knowledge base, called out as a limitation below for a larger one. | `retrieve_node` in [app/graph.py](app/graph.py) |
+| **Vector store** | Chroma, persisted to a local directory (`.chroma/`). One collection, similarity search with relevance scores over child chunks. | [app/vectorstore.py](app/vectorstore.py) |
+| **Reranking (blended)** | Retrieval first casts a wide net (`RETRIEVAL_CANDIDATES`, 12 child chunks by embedding similarity), then a cross-encoder (`BAAI/bge-reranker-base`) scores each `(question, chunk)` pair directly. The cross-encoder score is **blended** with the original embedding score (`RERANK_WEIGHT`, default 0.4 toward the cross-encoder) rather than used alone — see the limitations section for why pure reranking was tried and rejected. | [app/rerank.py](app/rerank.py) |
+| **Hierarchical expansion** | The top `TOP_K` (4) reranked child chunks are deduped by `parent_id` (a long document can surface several children from the same section) and expanded to their full parent section text via the parent store — this is what gives long documents enough surrounding context instead of a disconnected 800-char fragment. | `retrieve_node` in [app/graph.py](app/graph.py) |
 | **Grounded generation** | The answer prompt explicitly forbids using anything but the retrieved context and requires inline `[Source: doc §section]` tags — citation isn't a post-hoc add-on, it's part of what the model is instructed to produce. | [app/prompts/system_answer.md](app/prompts/system_answer.md) |
-| **Citation extraction** | A regex (`CITATION_RE`) parses the model's own `[Source: ...]` tags out of the answer text into a structured `citations` list, so the UI/CLI render them separately from prose. | `output_guardrail_node` in [app/graph.py](app/graph.py) |
-| **Incremental indexing** | New documents (uploaded via the UI or dropped into `data/policies/`) can be embedded and added to the *existing* collection without re-embedding everything else — `ingest_file()` vs the full `build_index()` rebuild. | [app/ingest.py](app/ingest.py) |
+| **Citation extraction** | A regex (`CITATION_RE`) parses the model's own `[Source: ...]` tags out of the answer text into a structured `citations` list, so the UI/CLI render them separately from prose. Unaffected by the parent expansion — citations are still `(source_doc, section)`, and parent = section. | `output_guardrail_node` in [app/graph.py](app/graph.py) |
+| **Incremental indexing** | New documents (uploaded via the UI or dropped into `data/policies/`) can be embedded and added to the *existing* collection (children + parents) without re-embedding everything else — `ingest_file()` vs the full `build_index()` rebuild. | [app/ingest.py](app/ingest.py) |
 
 ## Safety layer
 
@@ -148,6 +150,7 @@ things:
 | **Claude (Anthropic) / Groq** | The LLM doing classification, generation, and judging | Claude is the default/recommended path (`app/config.py`); Groq's free tier is a pluggable fallback for local dev without Anthropic credits — same code, `LLM_PROVIDER` env var picks the client |
 | **Chroma** | Vector store | Local, zero-infra, persists to disk — appropriate for a project-scoped knowledge base; would swap for a managed store at real scale |
 | **sentence-transformers (`all-MiniLM-L6-v2`)** | Embeddings | Runs locally, no extra API key, fast enough for this corpus size |
+| **sentence-transformers `CrossEncoder` (`BAAI/bge-reranker-base`)** | Reranking | Local, no API key; used as one signal blended with embedding similarity rather than the sole ranker (see Known Limitations — pure reranking underperformed here) |
 | **RAGAS** | RAG quality metrics (faithfulness, relevancy, precision, recall) | Purpose-built for exactly this — avoids hand-rolling LLM-judge eval prompts for metrics that already have a maintained, citable implementation |
 | **Streamlit** | Chat UI + document upload | Fastest path to an interactive demo with file upload, chat history, and expandable citation/safety panels, with minimal code |
 | **pypdf** | PDF text extraction for uploaded documents | Lets the upload feature accept real policy PDFs, not just markdown |
@@ -155,8 +158,20 @@ things:
 
 ## Known limitations / deliberate scope cuts
 
-- **No reranking or query rewriting** — fine for a six-to-seven-document knowledge base; would
-  need a reranker (e.g. a cross-encoder) and possibly query decomposition at real scale.
+- **Pure cross-encoder reranking was tried and didn't work well here.** Two general-purpose
+  rerankers (`cross-encoder/ms-marco-MiniLM-L-6-v2`, then `BAAI/bge-reranker-base`) were tested
+  as the sole ranking signal. Both sometimes buried a section that embedding similarity had
+  already ranked near the top — e.g. for "What are the KYC requirements for opening a new
+  corporate account?", the correct "§2 Corporate Customer Identification" section was embedding
+  rank #2 (0.39, essentially tied for #1) but cross-encoder rank #5-6 out of 12 candidates. On a
+  small, jargon-dense, structurally uniform policy corpus, these web-search-trained rerankers
+  don't transfer cleanly. The fix was to **blend** the cross-encoder score with the original
+  embedding score (`RERANK_WEIGHT`, [app/rerank.py](app/rerank.py)) rather than trust either
+  alone — worth knowing if you swap in a different reranker or corpus: re-validate before
+  assuming a "better" reranker model fixes ranking quality on its own.
+- **No query rewriting/decomposition** — a single embedding pass per question; a multi-part
+  question ("what's the AML threshold and how does it differ from KYC review frequency?") isn't
+  split into sub-queries.
 - **No multi-turn memory in the pipeline itself** — the Streamlit UI keeps chat history for
   display, but each question is answered independently; there's no conversational
   follow-up resolution ("what about for PEPs?" referring to the prior turn).
@@ -166,3 +181,7 @@ things:
   loop — a deliberate bound on latency/cost versus chasing a perfect score.
 - **Uploaded documents aren't deduplicated** — re-uploading the same file twice adds duplicate
   chunks; acceptable for a demo, would need a content hash check for production use.
+- **Pseudo-section fallback is positional, not semantic** — an unstructured long upload gets cut
+  into fixed-size "Part N" sections by character count, not by topic boundary. It bounds context
+  size safely, but a real outline (or a semantic chunker) would produce more coherent sections
+  for a genuinely long, unstructured document.
