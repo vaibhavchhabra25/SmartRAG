@@ -1,0 +1,25 @@
+name: CI
+
+# Runs on every push/PR but deliberately makes zero LLM API calls, so it's safe to run as often
+# as GitHub triggers it without burning a rate-limited key. Tests that need a real LLM (guardrail
+# classification, hallucination judge, RAGAS/guardrail evals) live in llm-eval.yml instead, which
+# only runs on manual dispatch.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fast-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Pure-logic chunking tests (no API calls)
+        run: pytest tests/test_ingest.py -v
+      - name: Build index (local embeddings only, no LLM calls)
+        run: python -m app.ingest

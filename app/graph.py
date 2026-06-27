@@ -1,10 +1,11 @@
 """LangGraph pipeline wiring guardrails, retrieval, generation, and hallucination checks together."""
 import re
+import time
 from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from app import config, parent_store
+from app import config, parent_store, telemetry
 from app.guardrails import check_input, check_output, refusal_for
 from app.hallucination import STRICTER_INSTRUCTION, UNVERIFIED_WARNING, check_grounding
 from app.llm import call_text
@@ -171,4 +172,7 @@ def get_graph():
 
 
 def ask(question: str) -> PipelineState:
-    return get_graph().invoke({"question": question})
+    start = time.monotonic()
+    result = get_graph().invoke({"question": question})
+    telemetry.log_run(question, result, time.monotonic() - start)
+    return result

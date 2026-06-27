@@ -141,6 +141,37 @@ things:
   thresholds (`faithfulness ≥ 0.80`, adversarial block rate ≥ 80%, false-positive rate ≤ 10%),
   so a regression fails a test run instead of just looking worse in a markdown report.
 
+## LLMOps: observability and CI
+
+Two pieces, both deliberately designed around a constraint: the project is tested against a
+**free-tier, rate-limited API key**, so anything that fires on every commit has to make zero (or
+very few) LLM calls.
+
+- **Run logging** ([app/telemetry.py](app/telemetry.py)): every `ask()` call appends one JSON
+  line to `logs/runs.jsonl` — latency, which provider/models answered, the guardrail
+  stage/category, grounded score, whether a regeneration happened, citation/retrieval counts.
+  This is pure instrumentation around calls the pipeline was already making, so it costs nothing
+  extra in API quota. It's the basic "what actually happened in production" record a model-judge
+  eval report alone doesn't give you — useful for debugging a specific bad answer after the fact,
+  not just an aggregate score.
+- **[eval/runs_summary.py](eval/runs_summary.py)** turns that log into aggregate operational
+  stats — block rate, regeneration rate, average latency/grounded score, a breakdown of *why*
+  things got blocked, and the last 10 runs. Also zero LLM calls: it only reads the log file, so
+  it's safe to run as often as you like even against a constrained key.
+- **CI is split into two workflows specifically because of the rate limit**:
+  - **[.github/workflows/ci.yml](.github/workflows/ci.yml)** runs on every push/PR and makes
+    *zero* LLM calls — the pure-logic chunking tests (`tests/test_ingest.py`) and an index
+    rebuild (local embeddings only). Safe to trigger as often as GitHub wants to.
+  - **[.github/workflows/llm-eval.yml](.github/workflows/llm-eval.yml)** runs the guardrail and
+    hallucination unit tests plus the full RAGAS/guardrail eval — dozens of real LLM calls. It's
+    `workflow_dispatch`-only (manual trigger), not wired to push/PR, because running that volume
+    on every commit would exhaust a free-tier key fast. Point it at a less-constrained key
+    (`GROQ_API_KEY` or `ANTHROPIC_API_KEY` repo secrets) and run it before a release.
+
+This split is the actual LLMOps lesson here: a quality gate that's too expensive to run
+automatically isn't a quality gate, it's a manual step someone will eventually skip. Splitting
+"cheap and automatic" from "expensive and deliberate" is what keeps both pieces actually used.
+
 ## Frameworks and why
 
 | Tool | Role | Why this one |
@@ -155,6 +186,7 @@ things:
 | **Streamlit** | Chat UI + document upload | Fastest path to an interactive demo with file upload, chat history, and expandable citation/safety panels, with minimal code |
 | **pypdf** | PDF text extraction for uploaded documents | Lets the upload feature accept real policy PDFs, not just markdown |
 | **pytest** | Test runner | Standard; `pytest.ini` marks the eval-backed tests `slow` since they make real LLM calls |
+| **GitHub Actions** | CI | Split into a free always-on workflow and a manual LLM-calling one — see LLMOps section above |
 
 ## Known limitations / deliberate scope cuts
 

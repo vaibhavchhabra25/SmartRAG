@@ -124,21 +124,45 @@ python -m eval.guardrail_eval       # guardrail effectiveness report -> eval/gua
 pytest tests/test_eval.py           # same two evals, asserted as CI gates
 ```
 
+## Observability & CI
+
+Every `ask()` call (CLI or UI) logs one line to `logs/runs.jsonl` — latency, guardrail
+stage/category, grounded score, regeneration, citation count — with zero extra LLM calls (see
+[app/telemetry.py](app/telemetry.py)). Turn it into aggregate stats anytime:
+
+```bash
+python -m eval.runs_summary         # block rate, avg latency/grounded score -> eval/runs_summary.md
+```
+
+CI is split in two, on purpose, because this project is tested against a free-tier rate-limited
+key:
+- **[.github/workflows/ci.yml](.github/workflows/ci.yml)** — every push/PR, zero LLM calls
+  (pure-logic chunking tests + an index rebuild).
+- **[.github/workflows/llm-eval.yml](.github/workflows/llm-eval.yml)** — manual trigger only
+  (`workflow_dispatch`); runs the guardrail/hallucination tests and the full RAGAS/guardrail
+  eval. Add `GROQ_API_KEY` or `ANTHROPIC_API_KEY` as a repo secret to use it.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md)'s LLMOps section for why it's split this way.
+
 ## Project layout
 
 ```
 data/policies/       sample policy markdown docs (AML, KYC, sanctions, monitoring, privacy, FAQ)
 app/
   config.py            models, paths, thresholds
-  ingest.py             load -> section-split -> chunk -> embed -> Chroma
+  ingest.py             load -> section-split -> chunk -> embed -> Chroma + parent store
   vectorstore.py         Chroma wrapper
-  llm.py                  Claude call helpers (plain text + strict JSON)
+  parent_store.py         parent (section) text lookup, persisted to .chroma/parents.json
+  rerank.py                cross-encoder rerank blended with embedding score
+  llm.py                  Claude/Groq call helpers (plain text + strict JSON)
   guardrails.py            input/output safety classifiers
   hallucination.py          grounding judge
+  telemetry.py              run logging (logs/runs.jsonl), zero extra LLM calls
   graph.py                   LangGraph pipeline
   cli.py                      quick CLI
   prompts/                     system + guardrail + judge prompts
-ui/streamlit_app.py    chat UI
-eval/                  golden dataset + RAGAS eval + guardrail eval
+ui/streamlit_app.py    chat UI + document upload
+eval/                  golden dataset + RAGAS eval + guardrail eval + runs_summary
 tests/                 pytest unit tests + eval threshold gates
+.github/workflows/     ci.yml (free, every push) + llm-eval.yml (manual, real LLM calls)
 ```

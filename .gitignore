@@ -7,5 +7,7 @@ __pycache__/
 venv/
 eval/report.md
 eval/guardrail_report.md
+eval/runs_summary.md
+logs/
 .DS_Store
 .claude/

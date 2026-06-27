@@ -1,0 +1,38 @@
+name: LLM Quality Eval
+
+# Manual-only: this workflow makes real LLM calls (guardrail classification, hallucination judge,
+# generation, RAGAS evaluation) — dozens of calls per run. Deliberately NOT wired to push/PR
+# triggers, since the free-tier GROQ_API_KEY this project tests against rate-limits well before
+# that volume would be sustainable on every commit. Run it manually when you want a quality gate
+# before a release, or point GROQ_API_KEY/ANTHROPIC_API_KEY at a less-constrained key.
+on:
+  workflow_dispatch:
+
+jobs:
+  llm-eval:
+    runs-on: ubuntu-latest
+    env:
+      LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'groq' }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Build index
+        run: python -m app.ingest
+      - name: Guardrail + hallucination unit tests
+        run: pytest tests/test_guardrails.py tests/test_hallucination.py -v
+      - name: RAGAS + guardrail quality eval (asserted thresholds)
+        run: pytest tests/test_eval.py -v
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: |
+            eval/report.md
+            eval/guardrail_report.md
