@@ -30,6 +30,7 @@ from app import config
 from app.graph import ask
 from app.llm import get_client
 from app.vectorstore import get_embeddings
+from eval.history import append_history
 
 DATASET_PATH = Path(__file__).resolve().parent / "golden_dataset.json"
 REPORT_PATH = Path(__file__).resolve().parent / "report.md"
@@ -109,6 +110,8 @@ def run():
     REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines[:8]))
     print(f"\nFull report written to {REPORT_PATH}")
+
+    append_history("ragas", {**{k: round(float(v), 4) for k, v in means.items()}, "all_pass": all_pass})
 
     return means, all_pass
 

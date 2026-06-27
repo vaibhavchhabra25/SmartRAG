@@ -26,8 +26,11 @@ jobs:
         run: python -m app.ingest
       - name: Guardrail + hallucination unit tests
         run: pytest tests/test_guardrails.py tests/test_hallucination.py -v
-      - name: RAGAS + guardrail quality eval (asserted thresholds)
+      - name: RAGAS + guardrail quality eval (asserted thresholds, appends to eval/*_history.jsonl)
         run: pytest tests/test_eval.py -v
+      - name: Build trend report from history (flags regressions vs previous run)
+        if: always()
+        run: python -m eval.eval_trend
       - name: Upload eval reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -36,3 +39,10 @@ jobs:
           path: |
             eval/report.md
             eval/guardrail_report.md
+            eval/eval_trend.md
+            eval/ragas_history.jsonl
+            eval/guardrail_history.jsonl
+      # History files (eval/*_history.jsonl) are updated on disk here but NOT auto-committed -
+      # this workflow is already deliberately manual (see header comment); committing the new
+      # history is a separate, deliberate step too. Download the updated files from this run's
+      # artifact/logs and commit them yourself when you want this run on the permanent record.

@@ -119,10 +119,15 @@ rebuilding the rest of the index. See `ingest_file()` in [app/ingest.py](app/ing
 
 ```bash
 pytest tests/                       # unit tests for guardrails + hallucination judge
-python -m eval.run_ragas_eval       # RAGAS quality report -> eval/report.md
-python -m eval.guardrail_eval       # guardrail effectiveness report -> eval/guardrail_report.md
+python -m eval.run_ragas_eval       # RAGAS quality report -> eval/report.md, appends to eval/ragas_history.jsonl
+python -m eval.guardrail_eval       # guardrail report -> eval/guardrail_report.md, appends to eval/guardrail_history.jsonl
 pytest tests/test_eval.py           # same two evals, asserted as CI gates
+python -m eval.eval_trend           # trend across all runs so far -> eval/eval_trend.md, flags regressions
 ```
+
+`eval/*_history.jsonl` is committed to the repo on purpose (unlike the other reports, which are
+regenerated each run and gitignored) — it's the quality record across commits, not just a single
+snapshot. Commit the updated history file after a real eval run if you want it on the record.
 
 ## Observability & CI
 
@@ -162,7 +167,8 @@ app/
   cli.py                      quick CLI
   prompts/                     system + guardrail + judge prompts
 ui/streamlit_app.py    chat UI + document upload
-eval/                  golden dataset + RAGAS eval + guardrail eval + runs_summary
+eval/                  golden dataset + RAGAS eval + guardrail eval + runs_summary + eval_trend
+  history.py             append-only score history per eval (eval/*_history.jsonl, committed)
 tests/                 pytest unit tests + eval threshold gates
 .github/workflows/     ci.yml (free, every push) + llm-eval.yml (manual, real LLM calls)
 ```

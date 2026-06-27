@@ -141,6 +141,19 @@ things:
   thresholds (`faithfulness ≥ 0.80`, adversarial block rate ≥ 80%, false-positive rate ≤ 10%),
   so a regression fails a test run instead of just looking worse in a markdown report.
 
+### Eval history (trend over commits, not a single snapshot)
+
+Both eval scripts append one record to `eval/ragas_history.jsonl` / `eval/guardrail_history.jsonl`
+each time they run ([eval/history.py](eval/history.py)) — timestamp, git SHA, and that run's
+scores. Unlike `eval/report.md` (overwritten every run, gitignored), **these history files are
+committed to the repo on purpose** — they're the actual answer to "did faithfulness drop after
+that prompt change?", which a single point-in-time report can't tell you.
+[eval/eval_trend.py](eval/eval_trend.py) reads both history files and renders a table with the
+delta from the previous run, flagging anything that dropped by more than 0.05 (or, for
+`fp_rate`, rose by more than 0.05 — false positives are the one metric where lower is better) as
+a regression. Zero LLM calls either way: appending and reading are both just file I/O over
+results the eval already computed.
+
 ## LLMOps: observability and CI
 
 Two pieces, both deliberately designed around a constraint: the project is tested against a

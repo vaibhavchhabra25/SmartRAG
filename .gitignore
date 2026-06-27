@@ -8,6 +8,8 @@ venv/
 eval/report.md
 eval/guardrail_report.md
 eval/runs_summary.md
+eval/eval_trend.md
 logs/
+# eval/*_history.jsonl is intentionally NOT ignored - it's the committed quality-trend record.
 .DS_Store
 .claude/

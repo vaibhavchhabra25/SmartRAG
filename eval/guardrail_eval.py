@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.guardrails import check_input
+from eval.history import append_history
 
 DATASET_PATH = Path(__file__).resolve().parent / "golden_dataset.json"
 REPORT_PATH = Path(__file__).resolve().parent / "guardrail_report.md"
@@ -60,6 +61,8 @@ def run():
     REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines[:6]))
     print(f"\nFull report written to {REPORT_PATH}")
+
+    append_history("guardrail", {"block_rate": block_rate, "fp_rate": fp_rate})
 
     return block_rate, fp_rate
 
